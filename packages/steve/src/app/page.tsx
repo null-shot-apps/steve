@@ -26,84 +26,178 @@ export default function PolymarketScanner() {
   const [filter, setFilter] = useState<OpportunityType | 'all'>('all');
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
-  // Mock data generator - replace with real Polymarket API calls
-  const generateMockOpportunities = (): Opportunity[] => {
-    const mockData: Opportunity[] = [
-      {
-        id: '1',
-        type: 'arbitrage',
-        title: 'Trump Win vs Republican Win Correlation',
-        description: 'Price gap detected between correlated markets',
-        profitPotential: 8.5,
-        markets: [
-          { name: 'Trump Wins 2024', currentPrice: 0.62, suggestedAction: 'BUY', url: 'https://polymarket.com/event/trump-wins' },
-          { name: 'Republican Wins 2024', currentPrice: 0.58, suggestedAction: 'SELL', url: 'https://polymarket.com/event/republican-wins' }
-        ],
-        confidence: 'high',
-        timestamp: new Date()
-      },
-      {
-        id: '2',
-        type: 'sum_error',
-        title: 'Fed Rate Decision Probabilities',
-        description: 'Market probabilities sum to 103% - arbitrage available',
-        profitPotential: 3.2,
-        markets: [
-          { name: 'Rate Cut 0.25%', currentPrice: 0.45, suggestedAction: 'SELL', url: 'https://polymarket.com/event/fed-rate-1' },
-          { name: 'Rate Cut 0.50%', currentPrice: 0.38, suggestedAction: 'SELL', url: 'https://polymarket.com/event/fed-rate-2' },
-          { name: 'No Change', currentPrice: 0.20, suggestedAction: 'SELL', url: 'https://polymarket.com/event/fed-rate-3' }
-        ],
-        confidence: 'medium',
-        timestamp: new Date()
-      },
-      {
-        id: '3',
-        type: 'whale_move',
-        title: 'Large Wallet Activity Detected',
-        description: 'Whale bought $50K in "Bitcoin $100K by March"',
-        profitPotential: 12.0,
-        markets: [
-          { name: 'Bitcoin $100K by March', currentPrice: 0.35, suggestedAction: 'BUY', url: 'https://polymarket.com/event/btc-100k' }
-        ],
-        confidence: 'medium',
-        timestamp: new Date()
-      },
-      {
-        id: '4',
-        type: 'volatility',
-        title: 'News Overreaction - AI Regulation',
-        description: 'Price spiked 15% in 10 minutes, likely to fade',
-        profitPotential: 6.8,
-        markets: [
-          { name: 'AI Regulation Passed 2024', currentPrice: 0.72, suggestedAction: 'SELL', url: 'https://polymarket.com/event/ai-regulation' }
-        ],
-        confidence: 'low',
-        timestamp: new Date()
-      },
-      {
-        id: '5',
-        type: 'liquidity',
-        title: 'Liquidity Imbalance - Taylor Swift',
-        description: 'Large spread at 0.50 price point, place limit order',
-        profitPotential: 4.5,
-        markets: [
-          { name: 'Taylor Swift Grammy Win', currentPrice: 0.48, suggestedAction: 'BUY', url: 'https://polymarket.com/event/taylor-swift' }
-        ],
-        confidence: 'high',
-        timestamp: new Date()
-      }
-    ];
-    return mockData;
+  // Fetch real Polymarket data
+  const fetchPolymarketData = async (): Promise<Opportunity[]> => {
+    try {
+      // Fetch active markets from Polymarket API
+      const response = await fetch('https://gamma-api.polymarket.com/markets?limit=50&active=true');
+      const markets = await response.json();
+      
+      const opportunities: Opportunity[] = [];
+      
+      // Strategy 1: Sum Error Detection
+      // Group markets by event and check if probabilities sum correctly
+      const eventGroups = new Map<string, typeof markets>();
+      markets.forEach((market: any) => {
+        const eventId = market.groupItemTitle || market.question;
+        if (!eventGroups.has(eventId)) {
+          eventGroups.set(eventId, []);
+        }
+        eventGroups.get(eventId)?.push(market);
+      });
+      
+      eventGroups.forEach((group, eventName) => {
+        if (group.length > 1) {
+          const totalProb = group.reduce((sum: number, m: any) => {
+            const outcomePrices = m.outcomePrices ? JSON.parse(m.outcomePrices) : ['0.5', '0.5'];
+            return sum + parseFloat(outcomePrices[0]);
+          }, 0);
+          
+          if (Math.abs(totalProb - 1.0) > 0.03) { // More than 3% deviation
+            opportunities.push({
+              id: `sum_${eventName}`,
+              type: 'sum_error',
+              title: `Probability Sum Error: ${eventName}`,
+              description: `Market probabilities sum to ${(totalProb * 100).toFixed(1)}% - arbitrage available`,
+              profitPotential: Math.abs(totalProb - 1.0) * 100,
+              markets: group.slice(0, 3).map((m: any) => {
+                const prices = m.outcomePrices ? JSON.parse(m.outcomePrices) : ['0.5', '0.5'];
+                return {
+                  name: m.question,
+                  currentPrice: parseFloat(prices[0]),
+                  suggestedAction: totalProb > 1.0 ? 'SELL' : 'BUY',
+                  url: `https://polymarket.com/event/${m.slug || m.id}`
+                };
+              }),
+              confidence: Math.abs(totalProb - 1.0) > 0.05 ? 'high' : 'medium',
+              timestamp: new Date()
+            });
+          }
+        }
+      });
+      
+      // Strategy 2: Volatility Detection (price changes)
+      markets.forEach((market: any) => {
+        if (market.volume24hr && parseFloat(market.volume24hr) > 10000) {
+          const prices = market.outcomePrices ? JSON.parse(market.outcomePrices) : ['0.5', '0.5'];
+          const currentPrice = parseFloat(prices[0]);
+          
+          // Detect extreme prices that might fade
+          if (currentPrice > 0.85 || currentPrice < 0.15) {
+            opportunities.push({
+              id: `vol_${market.id}`,
+              type: 'volatility',
+              title: `Extreme Price: ${market.question}`,
+              description: `Price at ${(currentPrice * 100).toFixed(0)}% - potential mean reversion`,
+              profitPotential: Math.abs(currentPrice - 0.5) * 20,
+              markets: [{
+                name: market.question,
+                currentPrice,
+                suggestedAction: currentPrice > 0.85 ? 'SELL' : 'BUY',
+                url: `https://polymarket.com/event/${market.slug || market.id}`
+              }],
+              confidence: 'medium',
+              timestamp: new Date()
+            });
+          }
+        }
+      });
+      
+      // Strategy 3: Liquidity Opportunities
+      markets.forEach((market: any) => {
+        const prices = market.outcomePrices ? JSON.parse(market.outcomePrices) : ['0.5', '0.5'];
+        const currentPrice = parseFloat(prices[0]);
+        const liquidity = parseFloat(market.liquidity || '0');
+        
+        // Low liquidity + price near psychological levels
+        if (liquidity < 5000 && (Math.abs(currentPrice - 0.5) < 0.05 || Math.abs(currentPrice - 0.75) < 0.05 || Math.abs(currentPrice - 0.25) < 0.05)) {
+          opportunities.push({
+            id: `liq_${market.id}`,
+            type: 'liquidity',
+            title: `Liquidity Play: ${market.question}`,
+            description: `Low liquidity at psychological price point - spread opportunity`,
+            profitPotential: 5.0,
+            markets: [{
+              name: market.question,
+              currentPrice,
+              suggestedAction: currentPrice < 0.5 ? 'BUY' : 'SELL',
+              url: `https://polymarket.com/event/${market.slug || market.id}`
+            }],
+            confidence: 'high',
+            timestamp: new Date()
+          });
+        }
+      });
+      
+      // Strategy 4: Arbitrage Detection (correlated markets)
+      // Look for related markets with price discrepancies
+      const correlatedPairs = [
+        ['trump', 'republican'],
+        ['bitcoin', 'crypto'],
+        ['fed', 'inflation'],
+        ['ai', 'tech']
+      ];
+      
+      correlatedPairs.forEach(([keyword1, keyword2]) => {
+        const market1 = markets.find((m: any) => m.question.toLowerCase().includes(keyword1));
+        const market2 = markets.find((m: any) => m.question.toLowerCase().includes(keyword2));
+        
+        if (market1 && market2) {
+          const prices1 = market1.outcomePrices ? JSON.parse(market1.outcomePrices) : ['0.5', '0.5'];
+          const prices2 = market2.outcomePrices ? JSON.parse(market2.outcomePrices) : ['0.5', '0.5'];
+          const price1 = parseFloat(prices1[0]);
+          const price2 = parseFloat(prices2[0]);
+          
+          if (Math.abs(price1 - price2) > 0.1) {
+            opportunities.push({
+              id: `arb_${market1.id}_${market2.id}`,
+              type: 'arbitrage',
+              title: `Correlation Gap: ${keyword1.toUpperCase()} vs ${keyword2.toUpperCase()}`,
+              description: `Price gap of ${(Math.abs(price1 - price2) * 100).toFixed(0)}% between correlated markets`,
+              profitPotential: Math.abs(price1 - price2) * 50,
+              markets: [
+                {
+                  name: market1.question,
+                  currentPrice: price1,
+                  suggestedAction: price1 > price2 ? 'SELL' : 'BUY',
+                  url: `https://polymarket.com/event/${market1.slug || market1.id}`
+                },
+                {
+                  name: market2.question,
+                  currentPrice: price2,
+                  suggestedAction: price2 > price1 ? 'SELL' : 'BUY',
+                  url: `https://polymarket.com/event/${market2.slug || market2.id}`
+                }
+              ],
+              confidence: 'high',
+              timestamp: new Date()
+            });
+          }
+        }
+      });
+      
+      // Sort by profit potential and return top opportunities
+      return opportunities
+        .sort((a, b) => b.profitPotential - a.profitPotential)
+        .slice(0, 10);
+      
+    } catch (error) {
+      console.error('Error fetching Polymarket data:', error);
+      return [];
+    }
   };
 
-  const scanMarkets = () => {
+  const scanMarkets = async () => {
     setIsScanning(true);
-    setTimeout(() => {
-      const newOpportunities = generateMockOpportunities();
+    try {
+      const newOpportunities = await fetchPolymarketData();
       setOpportunities(newOpportunities);
       setLastUpdate(new Date());
+    } catch (error) {
+      console.error('Scan failed:', error);
+    } finally {
       setIsScanning(false);
-    }, 1500);
+    }
   };
 
   useEffect(() => {
@@ -274,13 +368,16 @@ export default function PolymarketScanner() {
       </div>
 
       {/* Footer Note */}
-      <div className="max-w-7xl mx-auto mt-8 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-        <p className="text-yellow-300 text-sm">
-          <strong>Note:</strong> This scanner currently shows mock data for demonstration. 
-          Connect to Polymarket API for real-time opportunities. Always do your own research before trading.
+      <div className="max-w-7xl mx-auto mt-8 p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
+        <p className="text-green-300 text-sm">
+          <strong>✓ Live Data:</strong> Connected to Polymarket API. 
+          Opportunities are detected in real-time. Always do your own research before trading.
         </p>
       </div>
     </div>
   );
 }
+
+
+
 
