@@ -29,8 +29,8 @@ export default function PolymarketScanner() {
   // Fetch real Polymarket data
   const fetchPolymarketData = async (): Promise<Opportunity[]> => {
     try {
-      // Fetch active markets from Polymarket API
-      const response = await fetch('https://gamma-api.polymarket.com/markets?limit=50&active=true');
+      // Fetch active markets from Polymarket API via our proxy
+      const response = await fetch('/api/polymarket');
       const markets = await response.json();
       
       const opportunities: Opportunity[] = [];
@@ -377,6 +377,7 @@ export default function PolymarketScanner() {
     </div>
   );
 }
+
 
 
 
