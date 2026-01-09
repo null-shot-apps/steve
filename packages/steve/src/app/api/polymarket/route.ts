@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 
 export async function GET() {
   try {
-    const response = await fetch('https://gamma-api.polymarket.com/markets?limit=50&active=true', {
+    // Fetch active markets sorted by 24hr volume
+    const response = await fetch('https://gamma-api.polymarket.com/markets?closed=false&limit=100&order=volume24hr', {
       headers: {
         'Accept': 'application/json',
       },
@@ -22,4 +23,5 @@ export async function GET() {
     );
   }
 }
+
 
