@@ -2,8 +2,12 @@ import { NextResponse } from 'next/server';
 
 export async function GET() {
   try {
-    // Fetch active markets sorted by 24hr volume
-    const response = await fetch('https://gamma-api.polymarket.com/markets?closed=false&limit=100&order=volume24hr', {
+    // Fetch markets that are:
+    // - Not closed
+    // - Have active trading (volume > 0)
+    // - End date is in the future
+    const now = new Date().toISOString();
+    const response = await fetch(`https://gamma-api.polymarket.com/markets?closed=false&limit=100&active=true&end_date_min=${now}`, {
       headers: {
         'Accept': 'application/json',
       },
@@ -14,7 +18,15 @@ export async function GET() {
     }
     
     const data = await response.json();
-    return NextResponse.json(data);
+    
+    // Filter to only markets with recent volume and valid prices
+    const activeMarkets = data.filter((market: any) => {
+      const hasVolume = market.volume24hr && parseFloat(market.volume24hr) > 0;
+      const hasValidPrice = market.outcomePrices && market.outcomePrices.length > 0;
+      return hasVolume && hasValidPrice;
+    });
+    
+    return NextResponse.json(activeMarkets);
   } catch (error) {
     console.error('Error fetching Polymarket data:', error);
     return NextResponse.json(
@@ -23,5 +35,6 @@ export async function GET() {
     );
   }
 }
+
 
 
